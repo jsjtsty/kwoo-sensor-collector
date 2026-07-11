@@ -1,0 +1,48 @@
+site_id = "site-demo"
+
+[listen]
+bind = "0.0.0.0"
+port = 12345
+
+[storage]
+database = "data/collector.db"
+max_bytes = 1073741824
+
+[upload]
+url = "https://example.invalid/v1/telemetry/raw"
+key_id = "site-demo-key"
+secret = "replace-with-a-long-random-secret"
+batch_size = 100
+timeout_seconds = 15
+interval_seconds = 5
+max_retries = 8
+
+[[collectors]]
+id = "collector-01"
+address = 1
+function = 3
+start = 0
+count = 32
+interval_seconds = 1800
+response_timeout_seconds = 5
+retries = 2
+
+[[collectors]]
+id = "collector-02"
+address = 2
+function = 3
+start = 0
+count = 32
+interval_seconds = 1800
+response_timeout_seconds = 5
+retries = 2
+
+[[collectors]]
+id = "collector-03"
+address = 3
+function = 3
+start = 0
+count = 32
+interval_seconds = 1800
+response_timeout_seconds = 5
+retries = 2

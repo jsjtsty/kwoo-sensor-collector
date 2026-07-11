@@ -1,0 +1,90 @@
+name: Windows build and release
+
+on:
+  push:
+    branches: ["main", "master"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86
+            target: i686-pc-windows-msvc
+          - name: windows-x64
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: Run tests
+        run: cargo test --locked --target ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --locked --release --target ${{ matrix.target }}
+
+      - name: Package release files
+        shell: pwsh
+        run: |
+          $package = "kwoo-sensor-collector-${{ matrix.name }}"
+          $dir = Join-Path $env:RUNNER_TEMP $package
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Copy-Item "target\${{ matrix.target }}\release\kwoo-sensor-collector.exe" $dir
+          Copy-Item config.example.toml $dir\config.example.toml
+          Copy-Item install-service.ps1, uninstall-service.ps1, README.md, API.md $dir
+          Compress-Archive -Path "$dir\*" -DestinationPath "$env:GITHUB_WORKSPACE\$package.zip" -Force
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kwoo-sensor-collector-${{ matrix.name }}
+          path: kwoo-sensor-collector-${{ matrix.name }}.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: kwoo-sensor-collector-windows-*
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*.zip
