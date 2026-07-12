@@ -1,6 +1,6 @@
 # 上报接口契约
 
-采集端向 `POST /v1/telemetry/raw` 发送 JSON。服务端应使用 HTTPS、按 `event_id` 幂等，并在成功处理后返回 2xx。
+采集端向 `POST /sensor/v1/telemetry/raw` 发送 JSON（后端内部路由为 `/v1/telemetry/raw`）。服务端应使用 HTTPS、按 `event_id` 幂等，并在成功处理后返回 2xx。
 
 请求头为 `X-Key-Id`、`X-Timestamp` 和 `X-Signature`。签名算法为 HMAC-SHA256，规范字符串为：
 

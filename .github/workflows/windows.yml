@@ -21,8 +21,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: windows-x86
-            target: i686-pc-windows-msvc
           - name: windows-x64
             target: x86_64-pc-windows-msvc
 

@@ -1,4 +1,4 @@
-site_id = "site-demo"
+site_id = "chahayang"
 
 [listen]
 bind = "0.0.0.0"
@@ -9,9 +9,9 @@ database = "data/collector.db"
 max_bytes = 1073741824
 
 [upload]
-url = "https://example.invalid/v1/telemetry/raw"
-key_id = "site-demo-key"
-secret = "replace-with-a-long-random-secret"
+url = "http://127.0.0.1:8572/sensor/v1/telemetry/raw"
+key_id = "sensor-chahayang"
+secret = "replace-with-the-generated-chahayang-secret"
 batch_size = 100
 timeout_seconds = 15
 interval_seconds = 5

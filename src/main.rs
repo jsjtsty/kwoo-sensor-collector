@@ -14,7 +14,7 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
-    sync::{Mutex as AsyncMutex, mpsc},
+    sync::{Mutex as AsyncMutex, Notify, mpsc},
     time::{sleep, timeout},
 };
 use tracing::{error, info, warn};
@@ -155,10 +155,10 @@ impl Config {
     fn load(path: &str) -> Result<Self> {
         let text = fs::read_to_string(path).with_context(|| format!("read config {path}"))?;
         let mut c: Config = toml::from_str(&text).context("parse TOML")?;
-        if let Ok(secret) = std::env::var("KWOO_UPLOAD_SECRET") {
-            if !secret.is_empty() {
-                c.upload.secret = secret;
-            }
+        if let Ok(secret) = std::env::var("KWOO_UPLOAD_SECRET")
+            && !secret.is_empty()
+        {
+            c.upload.secret = secret;
         }
         if c.site_id.is_empty() {
             return Err(anyhow!("site_id is required"));
@@ -250,8 +250,19 @@ struct Response {
 #[derive(Clone)]
 struct Gateway {
     writer: Arc<AsyncMutex<Option<tokio::net::tcp::OwnedWriteHalf>>>,
+    connected: Arc<Notify>,
 }
 impl Gateway {
+    async fn wait_connected(&self) {
+        loop {
+            let notified = self.connected.notified();
+            if self.writer.lock().await.is_some() {
+                return;
+            }
+            notified.await;
+        }
+    }
+
     async fn send(&self, data: &[u8]) -> Result<()> {
         let mut g = self.writer.lock().await;
         match g.as_mut() {
@@ -280,6 +291,7 @@ async fn gateway_server(
         let (reader, writer) = stream.into_split();
         *guard = Some(writer);
         drop(guard);
+        gateway.connected.notify_waiters();
         info!(%peer, "gateway connected");
         let gw = gateway.clone();
         let out = tx.clone();
@@ -288,6 +300,7 @@ async fn gateway_server(
                 warn!(%peer, "gateway reader: {e:#}");
             }
             *gw.writer.lock().await = None;
+            gw.connected.notify_waiters();
             info!(%peer, "gateway disconnected");
         });
     }
@@ -370,10 +383,10 @@ struct Event {
 }
 impl Queue {
     fn open(path: &str, max_bytes: u64) -> Result<Self> {
-        if let Some(p) = Path::new(path).parent() {
-            if !p.as_os_str().is_empty() {
-                fs::create_dir_all(p)?;
-            }
+        if let Some(p) = Path::new(path).parent()
+            && !p.as_os_str().is_empty()
+        {
+            fs::create_dir_all(p)?;
         }
         let c = Connection::open(path)?;
         c.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS events (event_id TEXT PRIMARY KEY, payload TEXT NOT NULL, bytes INTEGER NOT NULL, created_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS events_created ON events(created_at);")?;
@@ -447,6 +460,7 @@ async fn poller(
             continue;
         }
         let c = &cfg.collectors[idx];
+        gateway.wait_connected().await;
         next.insert(
             c.id.clone(),
             tokio::time::Instant::now() + Duration::from_secs(c.interval_seconds),
@@ -471,6 +485,13 @@ async fn poller(
             })
             .await;
             if let Ok(Some(r)) = result {
+                info!(
+                    collector=%c.id,
+                    address = format_args!("0x{:02X}", c.address),
+                    registers = r.raw.get(2).copied().unwrap_or_default() / 2,
+                    crc_valid = r.crc_ok,
+                    "sensor response received"
+                );
                 got = Some(r);
                 break;
             }
@@ -496,6 +517,8 @@ async fn poller(
             if r.crc_ok {
                 if let Err(err) = queue.enqueue(&e) {
                     error!(collector=%c.id, "queue event: {err:#}");
+                } else {
+                    info!(collector=%c.id, event_id=%e.event_id, "sensor event queued");
                 }
             } else {
                 warn!(collector=%c.id, "response CRC invalid");
@@ -562,8 +585,11 @@ async fn uploader(cfg: UploadConfig, site_id: String, queue: Queue) {
         match resp {
             Ok(r) if r.status().is_success() => {
                 let ids: Vec<String> = batch.iter().map(|e| e.event_id.clone()).collect();
+                let count = ids.len();
                 if let Err(e) = queue.ack(&ids) {
                     error!("queue ack: {e:#}");
+                } else {
+                    info!(count, "sensor upload succeeded and queue acknowledged");
                 }
                 backoff = 1;
                 failures = 0;
@@ -609,6 +635,7 @@ async fn main() -> Result<()> {
     let queue = Queue::open(&cfg.storage.database, cfg.storage.max_bytes)?;
     let gateway = Gateway {
         writer: Arc::new(AsyncMutex::new(None)),
+        connected: Arc::new(Notify::new()),
     };
     let (tx, rx) = mpsc::channel(128);
     let server_gateway = gateway.clone();
